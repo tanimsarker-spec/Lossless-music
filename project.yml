@@ -1,0 +1,33 @@
+name: Lossless
+options:
+  bundleIdPrefix: com.tanimsarker
+  deploymentTarget:
+    iOS: "15.0"
+targets:
+  Lossless:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+      - path: ../core/ll_core.cpp
+        compilerFlags: ["-x", "objective-c++", "-DMA_NO_RUNTIME_LINKING"]
+    settings:
+      base:
+        SWIFT_VERSION: "5.0"
+        SWIFT_OBJC_BRIDGING_HEADER: App/Bridge.h
+        HEADER_SEARCH_PATHS: ["$(SRCROOT)/../core", "$(SRCROOT)/../third_party"]
+        CLANG_CXX_LANGUAGE_STANDARD: c++17
+        PRODUCT_BUNDLE_IDENTIFIER: com.tanimsarker.lossless
+        CODE_SIGNING_ALLOWED: "NO"
+    dependencies:
+      - sdk: AudioToolbox.framework
+      - sdk: CoreAudio.framework
+      - sdk: CoreFoundation.framework
+      - sdk: AVFoundation.framework
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: LOSSLESS
+        UIBackgroundModes: [audio]
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
