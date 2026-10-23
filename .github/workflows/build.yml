@@ -1,0 +1,112 @@
+name: Build LOSSLESS
+on: [push, workflow_dispatch]
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    defaults:
+      run: { shell: bash }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Arrange files
+        run: |
+          get() { find . \( -path ./.git -o -path ./_w \) -prune -o -type f -name "$1" -print | head -1; }
+          put() { src="$(get "$1")"; [ -n "$src" ] || { echo "MISSING FILE: $1"; exit 1; }; mkdir -p "$(dirname "$2")"; cp "$src" "$2"; }
+          W=_w
+          put settings.gradle        $W/android/settings.gradle
+          put gradle.properties      $W/android/gradle.properties
+          put AndroidManifest.xml    $W/android/app/src/main/AndroidManifest.xml
+          put MainActivity.java      $W/android/app/src/main/java/com/tanimsarker/lossless/MainActivity.java
+          put Engine.java            $W/shared/java/com/tanimsarker/lossless/Engine.java
+          put CMakeLists.txt         $W/core/CMakeLists.txt
+          put ll_core.cpp            $W/core/ll_core.cpp
+          put ll_core.h              $W/core/ll_core.h
+          put ll_jni.cpp             $W/core/ll_jni.cpp
+          APP="$(grep -rl --include='build*.gradle' --exclude-dir=.git --exclude-dir=_w 'namespace' . | head -1)"
+          ROOT="$(grep -rL --include='build*.gradle' --exclude-dir=.git --exclude-dir=_w 'namespace' . | head -1)"
+          [ -n "$APP" ] && [ -n "$ROOT" ] || { echo "MISSING: the two build.gradle files"; exit 1; }
+          mkdir -p $W/android/app
+          cp "$APP"  $W/android/app/build.gradle
+          cp "$ROOT" $W/android/build.gradle
+          find $W -type f | sort
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '17' }
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: '8.9' }
+      - run: gradle -p _w/android assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with: { name: lossless-android-apk, path: _w/android/app/build/outputs/apk/debug/app-debug.apk }
+
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run: { shell: bash }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Arrange files
+        run: |
+          get() { find . \( -path ./.git -o -path ./_w \) -prune -o -type f -name "$1" -print | head -1; }
+          put() { src="$(get "$1")"; [ -n "$src" ] || { echo "MISSING FILE: $1"; exit 1; }; mkdir -p "$(dirname "$2")"; cp "$src" "$2"; }
+          W=_w
+          put Engine.java     $W/shared/java/com/tanimsarker/lossless/Engine.java
+          put DesktopApp.java $W/desktop/src/com/tanimsarker/lossless/DesktopApp.java
+          put run.sh          $W/desktop/run.sh
+          put run.bat         $W/desktop/run.bat
+          put CMakeLists.txt  $W/core/CMakeLists.txt
+          put ll_core.cpp     $W/core/ll_core.cpp
+          put ll_core.h       $W/core/ll_core.h
+          put ll_jni.cpp      $W/core/ll_jni.cpp
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '17' }
+      - name: Build C++ core
+        working-directory: _w
+        run: |
+          cmake -S core -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --config Release
+      - name: Build Java app and package
+        working-directory: _w
+        run: |
+          mkdir -p out dist
+          javac -d out shared/java/com/tanimsarker/lossless/Engine.java desktop/src/com/tanimsarker/lossless/DesktopApp.java
+          jar cfe dist/lossless.jar com.tanimsarker.lossless.DesktopApp -C out .
+          cp $(find build \( -name 'lossless_jni.dll' -o -name 'liblossless_jni.so' -o -name 'liblossless_jni.dylib' \)) dist/
+          cp desktop/run.sh desktop/run.bat dist/
+      - uses: actions/upload-artifact@v4
+        with: { name: 'lossless-desktop-${{ matrix.os }}', path: _w/dist }
+
+  ios:
+    runs-on: macos-latest
+    defaults:
+      run: { shell: bash }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Arrange files
+        run: |
+          get() { find . \( -path ./.git -o -path ./_w \) -prune -o -type f -name "$1" -print | head -1; }
+          put() { src="$(get "$1")"; [ -n "$src" ] || { echo "MISSING FILE: $1"; exit 1; }; mkdir -p "$(dirname "$2")"; cp "$src" "$2"; }
+          W=_w
+          put project.yml       $W/ios/project.yml
+          put Bridge.h          $W/ios/App/Bridge.h
+          put LosslessApp.swift $W/ios/App/LosslessApp.swift
+          put ll_core.cpp       $W/core/ll_core.cpp
+          put ll_core.h         $W/core/ll_core.h
+          mkdir -p $W/third_party
+          curl -fsSL https://raw.githubusercontent.com/mackron/miniaudio/0.11.21/miniaudio.h -o $W/third_party/miniaudio.h
+      - run: brew install xcodegen
+      - name: Generate Xcode project
+        working-directory: _w
+        run: xcodegen generate --spec ios/project.yml --project ios
+      - name: Build unsigned app
+        working-directory: _w
+        run: |
+          xcodebuild -project ios/Lossless.xcodeproj -scheme Lossless -sdk iphoneos -configuration Release \
+            -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/Lossless.app Payload/
+          zip -qr Lossless-unsigned.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with: { name: lossless-ios-unsigned-ipa, path: _w/Lossless-unsigned.ipa }
