@@ -1,0 +1,61 @@
+name: Build LOSSLESS (Android, Windows, Linux, macOS, iOS)
+on: [push, workflow_dispatch]
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '17' }
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: '8.9' }
+      - run: gradle -p android assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with: { name: lossless-android-apk, path: android/app/build/outputs/apk/debug/app-debug.apk }
+
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run: { shell: bash }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '17' }
+      - name: Build C++ core
+        run: |
+          cmake -S core -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --config Release
+      - name: Build Java app and package
+        run: |
+          mkdir -p out dist
+          javac -d out shared/java/com/tanimsarker/lossless/Engine.java desktop/src/com/tanimsarker/lossless/DesktopApp.java
+          jar cfe dist/lossless.jar com.tanimsarker.lossless.DesktopApp -C out .
+          cp $(find build \( -name 'lossless_jni.dll' -o -name 'liblossless_jni.so' -o -name 'liblossless_jni.dylib' \)) dist/
+          cp desktop/run.sh desktop/run.bat dist/
+      - uses: actions/upload-artifact@v4
+        with: { name: 'lossless-desktop-${{ matrix.os }}', path: dist }
+
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch miniaudio
+        run: |
+          mkdir -p third_party
+          curl -fsSL https://raw.githubusercontent.com/mackron/miniaudio/0.11.21/miniaudio.h -o third_party/miniaudio.h
+      - run: brew install xcodegen
+      - run: xcodegen generate --spec ios/project.yml --project ios
+      - name: Build unsigned app
+        run: |
+          xcodebuild -project ios/Lossless.xcodeproj -scheme Lossless -sdk iphoneos -configuration Release \
+            -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/Lossless.app Payload/
+          zip -qr Lossless-unsigned.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with: { name: lossless-ios-unsigned-ipa, path: Lossless-unsigned.ipa }
